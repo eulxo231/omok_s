@@ -328,13 +328,22 @@
 
   btnJoin.addEventListener("click", () => {
     setLobbyError("");
-    ensureNet().join(roomInput.value);
+    const code = roomInput.value.trim();
+    if (!code) {
+      setLobbyError("Enter a 4-character room code.");
+      return;
+    }
+    btnJoin.disabled = true;
+    ensureNet().join(code);
+    setTimeout(() => {
+      btnJoin.disabled = false;
+    }, 1500);
   });
 
   roomInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
-      setLobbyError("");
-      ensureNet().join(roomInput.value);
+      e.preventDefault();
+      btnJoin.click();
     }
   });
 

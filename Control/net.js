@@ -1,9 +1,10 @@
 /**
- * Peer-to-peer online rooms (works on GitHub Pages; no game server required).
+ * Online rooms over a public MQTT broker (works on GitHub Pages).
  */
 const Net = (() => {
   const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const PEER_PREFIX = "omoks-";
+  const BROKER = "wss://broker.emqx.io:8084/mqtt";
+  const TOPIC_PREFIX = "omok_s/v1/";
 
   function makeCode() {
     let code = "";
@@ -11,6 +12,10 @@ const Net = (() => {
       code += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
     }
     return code;
+  }
+
+  function makeId() {
+    return "omok-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   }
 
   function serializeGame(game) {
@@ -39,23 +44,45 @@ const Net = (() => {
   }
 
   function connect(handlers = {}) {
-    let peer = null;
-    let conn = null;
+    let client = null;
+    let clientId = null;
     let role = null;
     let code = null;
+    let topic = null;
     let room = null;
-    let self = null;
+    let ready = false;
+    let busy = false;
+    let greeted = false;
+    let joinTimer = null;
 
     function emit(msg) {
       if (handlers.onMessage) handlers.onMessage(msg);
     }
 
     function fail(message) {
+      busy = false;
       emit({ type: "error", message });
     }
 
-    function send(data) {
-      if (conn && conn.open) conn.send(data);
+    function clearJoinTimer() {
+      if (joinTimer) {
+        clearTimeout(joinTimer);
+        joinTimer = null;
+      }
+    }
+
+    function publish(payload, opts) {
+      if (!client || !topic || !client.connected) return;
+      client.publish(topic, JSON.stringify(payload), opts || { qos: 0 });
+    }
+
+    function clearRetain() {
+      if (!client || !topic) return;
+      try {
+        client.publish(topic, "", { retain: true, qos: 0 });
+      } catch (_) {
+        /* ignore */
+      }
     }
 
     function clearRematch() {
@@ -64,29 +91,29 @@ const Net = (() => {
     }
 
     function teardown() {
-      const oldConn = conn;
-      const oldPeer = peer;
-      conn = null;
-      peer = null;
+      clearJoinTimer();
+      busy = false;
+      greeted = false;
+      const old = client;
+      client = null;
+      clientId = null;
       role = null;
       code = null;
+      topic = null;
       room = null;
-      try {
-        if (oldConn) oldConn.close();
-      } catch (_) {
-        /* ignore */
-      }
-      try {
-        if (oldPeer) oldPeer.destroy();
-      } catch (_) {
-        /* ignore */
+      ready = false;
+      if (old) {
+        try {
+          old.end(true);
+        } catch (_) {
+          /* ignore */
+        }
       }
     }
 
     function broadcastState(type) {
-      const ready = Boolean(conn && conn.open);
       const base = snapshot(room, code, ready);
-      send({ type, color: WHITE, ...base });
+      publish({ type, from: clientId, ...base });
       emit({ type, color: BLACK, ...base });
     }
 
@@ -98,147 +125,218 @@ const Net = (() => {
         return;
       }
       const base = snapshot(room, code, true);
-      send({ type: "rematch", color: WHITE, ...base });
+      publish({ type: "rematch", from: clientId, ...base });
       emit({ type: "rematch", color: BLACK, ...base });
     }
 
-    function attachHostConn(c) {
-      if (conn && conn !== c && conn.open) {
-        try {
-          c.send({ type: "error", message: "Room is full." });
-          c.close();
-        } catch (_) {
-          /* ignore */
+    function onHostMessage(msg) {
+      if (!msg || msg.from === clientId) return;
+
+      switch (msg.type) {
+        case "hello": {
+          if (ready) {
+            publish({
+              type: "error",
+              from: clientId,
+              to: msg.from,
+              message: "Room is full.",
+            });
+            return;
+          }
+          ready = true;
+          const base = snapshot(room, code, true);
+          publish({
+            type: "welcome",
+            from: clientId,
+            to: msg.from,
+            color: WHITE,
+            ...base,
+          });
+          emit({ type: "opponent_joined", color: BLACK, ...base });
+          break;
         }
+        case "place": {
+          if (!ready) return;
+          if (room.game.turn !== WHITE) {
+            publish({
+              type: "error",
+              from: clientId,
+              to: msg.from,
+              message: "Not your turn.",
+            });
+            return;
+          }
+          const result = placeStone(room.game, Number(msg.r), Number(msg.c));
+          if (!result.ok) {
+            publish({
+              type: "error",
+              from: clientId,
+              to: msg.from,
+              message: "Invalid move.",
+            });
+            return;
+          }
+          clearRematch();
+          broadcastState("state");
+          break;
+        }
+        case "rematch": {
+          if (!ready) return;
+          room.rematchWhite = true;
+          finishRematchIfReady();
+          break;
+        }
+        case "leave":
+        case "peer_gone": {
+          if (!ready) return;
+          ready = false;
+          reset(room.game);
+          clearRematch();
+          emit({
+            type: "opponent_left",
+            color: BLACK,
+            ...snapshot(room, code, false),
+          });
+          break;
+        }
+        default:
+          break;
+      }
+    }
+
+    function onGuestMessage(msg) {
+      if (!msg || msg.from === clientId) return;
+      if (msg.to && msg.to !== clientId) return;
+
+      switch (msg.type) {
+        case "host_ready": {
+          if (!greeted && !ready) {
+            greeted = true;
+            publish({ type: "hello", from: clientId });
+          }
+          break;
+        }
+        case "welcome": {
+          clearJoinTimer();
+          busy = false;
+          ready = true;
+          emit({ type: "joined", color: WHITE, ...msg });
+          break;
+        }
+        case "state":
+        case "rematch": {
+          emit({ ...msg, color: WHITE });
+          break;
+        }
+        case "leave":
+        case "peer_gone": {
+          if (handlers.onClose) handlers.onClose();
+          break;
+        }
+        case "error": {
+          busy = false;
+          clearJoinTimer();
+          emit({ type: "error", message: msg.message || "Something went wrong." });
+          break;
+        }
+        default:
+          break;
+      }
+    }
+
+    function handleMessage(raw) {
+      let msg;
+      try {
+        msg = JSON.parse(String(raw));
+      } catch {
         return;
       }
-
-      conn = c;
-
-      c.on("data", (data) => {
-        if (!data || !room) return;
-
-        switch (data.type) {
-          case "hello": {
-            const readySnap = snapshot(room, code, true);
-            send({ type: "welcome", color: WHITE, ...readySnap });
-            emit({ type: "opponent_joined", color: BLACK, ...readySnap });
-            break;
-          }
-          case "place": {
-            if (room.game.turn !== WHITE) {
-              send({ type: "error", message: "Not your turn." });
-              return;
-            }
-            const result = placeStone(room.game, Number(data.r), Number(data.c));
-            if (!result.ok) {
-              send({ type: "error", message: "Invalid move." });
-              return;
-            }
-            clearRematch();
-            broadcastState("state");
-            break;
-          }
-          case "rematch": {
-            room.rematchWhite = true;
-            finishRematchIfReady();
-            break;
-          }
-          case "leave": {
-            try {
-              c.close();
-            } catch (_) {
-              /* ignore */
-            }
-            break;
-          }
-          default:
-            break;
-        }
-      });
-
-      c.on("close", () => {
-        if (conn !== c) return;
-        conn = null;
-        if (!room || !code) return;
-        reset(room.game);
-        clearRematch();
-        emit({
-          type: "opponent_left",
-          color: BLACK,
-          ...snapshot(room, code, false),
-        });
-      });
+      if (role === "host") onHostMessage(msg);
+      else if (role === "guest") onGuestMessage(msg);
     }
 
-    function attachGuestConn(c) {
-      conn = c;
-
-      c.on("data", (data) => {
-        if (!data) return;
-        if (data.type === "welcome") {
-          emit({ type: "joined", ...data });
-          return;
-        }
-        if (data.type === "state" || data.type === "rematch") {
-          emit({ ...data, color: WHITE });
-          return;
-        }
-        if (data.type === "error") emit(data);
-      });
-
-      c.on("close", () => {
-        if (handlers.onClose) handlers.onClose();
-      });
-
-      c.on("open", () => {
-        send({ type: "hello" });
-      });
-    }
-
-    function ensurePeerLib() {
-      if (typeof Peer !== "undefined") return true;
+    function ensureMqtt() {
+      if (typeof mqtt !== "undefined") return true;
       fail("Online library failed to load. Refresh and try again.");
       return false;
     }
 
-    self = {
+    function startClient(willRole) {
+      clientId = makeId();
+      client = mqtt.connect(BROKER, {
+        clientId,
+        clean: true,
+        reconnectPeriod: 0,
+        connectTimeout: 12000,
+        will: {
+          topic,
+          payload: JSON.stringify({
+            type: "peer_gone",
+            from: clientId,
+            role: willRole,
+          }),
+          qos: 0,
+          retain: false,
+        },
+      });
+
+      client.on("message", (_t, payload) => handleMessage(payload));
+      client.on("error", () => {
+        /* connect handler / timeout covers user-facing errors */
+      });
+    }
+
+    return {
       create() {
-        if (!ensurePeerLib()) return;
+        if (!ensureMqtt()) return;
+        if (busy) return;
         teardown();
+        busy = true;
 
         code = makeCode();
+        topic = TOPIC_PREFIX + code;
         room = {
           game: createGame(),
           rematchBlack: false,
           rematchWhite: false,
         };
         role = "host";
+        ready = false;
 
-        peer = new Peer(PEER_PREFIX + code);
-        peer.on("open", () => {
-          emit({
-            type: "created",
-            color: BLACK,
-            ...snapshot(room, code, false),
-          });
-        });
-        peer.on("connection", (c) => {
-          if (c.open) attachHostConn(c);
-          else c.on("open", () => attachHostConn(c));
-        });
-        peer.on("error", (err) => {
-          if (err && err.type === "unavailable-id") {
-            self.create();
-            return;
+        startClient("host");
+
+        const createTimer = setTimeout(() => {
+          if (busy && role === "host") {
+            fail("Could not create room. Try again.");
+            teardown();
           }
-          fail("Could not create room. Try again.");
-          if (handlers.onError) handlers.onError(err);
+        }, 12000);
+
+        client.on("connect", () => {
+          clearTimeout(createTimer);
+          client.subscribe(topic, { qos: 0 }, (err) => {
+            if (err) {
+              fail("Could not create room. Try again.");
+              teardown();
+              return;
+            }
+            publish(
+              { type: "host_ready", from: clientId },
+              { retain: true, qos: 0 }
+            );
+            busy = false;
+            emit({
+              type: "created",
+              color: BLACK,
+              ...snapshot(room, code, false),
+            });
+          });
         });
       },
 
       join(rawCode) {
-        if (!ensurePeerLib()) return;
+        if (!ensureMqtt()) return;
+        if (busy) return;
 
         const normalized = String(rawCode || "")
           .trim()
@@ -249,24 +347,44 @@ const Net = (() => {
         }
 
         teardown();
+        busy = true;
+        greeted = false;
         code = normalized;
+        topic = TOPIC_PREFIX + code;
         role = "guest";
+        ready = false;
+        room = null;
 
-        peer = new Peer();
-        peer.on("open", () => {
-          const c = peer.connect(PEER_PREFIX + code, { reliable: true });
-          attachGuestConn(c);
-          if (c.open) send({ type: "hello" });
-        });
-        peer.on("error", () => {
-          fail("Could not join room. Check the code and try again.");
-          if (handlers.onError) handlers.onError();
+        startClient("guest");
+
+        const joinConnectTimer = setTimeout(() => {
+          if (busy && !ready && role === "guest") {
+            fail("Could not join room. Try again.");
+            teardown();
+          }
+        }, 12000);
+
+        client.on("connect", () => {
+          clearTimeout(joinConnectTimer);
+          client.subscribe(topic, { qos: 0 }, (err) => {
+            if (err) {
+              fail("Could not join room. Try again.");
+              teardown();
+              return;
+            }
+            joinTimer = setTimeout(() => {
+              if (!ready) {
+                fail("Room not found. Check the code and try again.");
+                teardown();
+              }
+            }, 6000);
+          });
         });
       },
 
       place(r, c) {
         if (role === "host") {
-          if (!room) return;
+          if (!room || !ready) return;
           if (room.game.turn !== BLACK) return;
           const result = placeStone(room.game, Number(r), Number(c));
           if (!result.ok) return;
@@ -274,21 +392,24 @@ const Net = (() => {
           broadcastState("state");
           return;
         }
-        send({ type: "place", r, c });
+        publish({ type: "place", from: clientId, r, c });
       },
 
       reset() {
         if (role === "host") {
-          if (!room || !conn) return;
+          if (!room || !ready) return;
           room.rematchBlack = true;
           finishRematchIfReady();
           return;
         }
-        send({ type: "rematch" });
+        publish({ type: "rematch", from: clientId });
       },
 
       leave() {
-        send({ type: "leave" });
+        if (client && topic && client.connected) {
+          publish({ type: "leave", from: clientId, role });
+          if (role === "host") clearRetain();
+        }
         emit({ type: "left" });
         teardown();
       },
@@ -297,8 +418,6 @@ const Net = (() => {
         teardown();
       },
     };
-
-    return self;
   }
 
   return { connect };
