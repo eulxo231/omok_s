@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Omok</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/View/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <h1 class="brand">Omok</h1>
+        <p class="tagline">Five in a row. Black moves first.</p>
+      </header>
+
+      <div class="mode-switch" role="tablist" aria-label="Play mode">
+        <button
+          type="button"
+          class="mode-btn active"
+          id="mode-local"
+          role="tab"
+          aria-selected="true"
+        >
+          Local
+        </button>
+        <button
+          type="button"
+          class="mode-btn"
+          id="mode-online"
+          role="tab"
+          aria-selected="false"
+        >
+          Online
+        </button>
+      </div>
+
+      <section id="online-panel" class="online-panel hidden">
+        <div id="lobby" class="lobby">
+          <button type="button" id="btn-create" class="btn btn-primary">
+            Create room
+          </button>
+          <div class="join-row">
+            <input
+              id="room-input"
+              class="room-input"
+              type="text"
+              maxlength="4"
+              placeholder="CODE"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="Room code"
+            />
+            <button type="button" id="btn-join" class="btn">Join</button>
+          </div>
+          <p id="lobby-error" class="lobby-error" role="alert"></p>
+        </div>
+
+        <div id="room-info" class="room-info hidden">
+          <div class="room-code-block">
+            <span class="room-label">Room</span>
+            <span id="room-code" class="room-code">----</span>
+          </div>
+          <p id="room-role" class="room-role">You are Black</p>
+          <p id="room-wait" class="room-wait">Waiting for opponent…</p>
+          <button type="button" id="btn-leave" class="btn">Leave room</button>
+        </div>
+      </section>
+
+      <aside class="status" aria-live="polite">
+        <div class="turn-row">
+          <span class="stone-preview" id="turn-stone" data-color="black"></span>
+          <span id="status-text">Black to move</span>
+        </div>
+        <div class="meta">
+          <span id="move-count">Moves: 0</span>
+        </div>
+      </aside>
+
+      <main class="board-wrap">
+        <div
+          id="board"
+          class="board"
+          role="grid"
+          aria-label="Omok board, 15 by 15"
+        ></div>
+      </main>
+
+      <nav class="actions">
+        <button type="button" id="btn-undo" class="btn">Undo</button>
+        <button type="button" id="btn-reset" class="btn btn-primary">
+          New game
+        </button>
+      </nav>
+    </div>
+
+    <div id="overlay" class="overlay hidden" role="dialog" aria-modal="true">
+      <div class="overlay-panel">
+        <p id="overlay-message" class="overlay-message"></p>
+        <p id="overlay-hint" class="overlay-hint"></p>
+        <button type="button" id="btn-overlay-reset" class="btn btn-primary">
+          Play again
+        </button>
+      </div>
+    </div>
+
+    <script src="/Model/game.js"></script>
+    <script src="/View/boardView.js"></script>
+    <script src="/Control/net.js"></script>
+    <script src="/Control/controller.js"></script>
+  </body>
+</html>
