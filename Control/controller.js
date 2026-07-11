@@ -185,16 +185,19 @@
       },
       onClose() {
         if (mode === "online" && roomCode) {
-          setLobbyError("Disconnected from server.");
+          setLobbyError("Opponent disconnected.");
           showLobby();
           game = createGame();
           lastOver = false;
           refresh();
         }
-        net = null;
+        if (net) {
+          net.close();
+          net = null;
+        }
       },
       onError() {
-        setLobbyError("Connection error.");
+        // Specific errors are sent as { type: "error", message }
       },
     });
     return net;
@@ -266,7 +269,6 @@
     BoardView.hideOverlay(overlay);
 
     if (mode === "online") {
-      ensureNet();
       showLobby();
     }
 
