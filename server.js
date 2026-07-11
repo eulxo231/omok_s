@@ -265,7 +265,14 @@ function handleLeave(ws) {
 }
 
 const server = http.createServer((req, res) => {
-  const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+  let urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+  // Match GitHub Pages project paths locally (/omok_s/...)
+  if (urlPath === "/omok_s" || urlPath === "/omok_s/") {
+    urlPath = "/";
+  } else if (urlPath.startsWith("/omok_s/")) {
+    urlPath = urlPath.slice("/omok_s".length);
+  }
+
   let filePath = urlPath === "/" ? "/index.html" : urlPath;
   filePath = path.normalize(filePath).replace(/^(\.\.[/\\])+/, "");
   const abs = path.join(ROOT, filePath);

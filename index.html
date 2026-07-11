@@ -2,16 +2,6 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <script>
-      (function () {
-        var base = "/";
-        if (/\.github\.io$/i.test(location.hostname)) {
-          var seg = location.pathname.split("/").filter(Boolean)[0];
-          if (seg) base = "/" + seg + "/";
-        }
-        document.write('<base href="' + base + '">');
-      })();
-    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Omok</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -20,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="View/styles.css" />
+    <link rel="stylesheet" href="/omok_s/View/styles.css" />
   </head>
   <body>
     <div class="app">
@@ -119,9 +109,9 @@
       </div>
     </div>
 
-    <script src="Model/game.js"></script>
-    <script src="View/boardView.js"></script>
-    <script src="Control/net.js"></script>
-    <script src="Control/controller.js"></script>
+    <script src="/omok_s/Model/game.js"></script>
+    <script src="/omok_s/View/boardView.js"></script>
+    <script src="/omok_s/Control/net.js"></script>
+    <script src="/omok_s/Control/controller.js"></script>
   </body>
 </html>
